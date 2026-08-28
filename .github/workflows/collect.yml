@@ -1,0 +1,61 @@
+# .github/workflows/collect.yml
+name: collect
+
+on:
+  schedule:
+    # Every 4 hours. The :23 offset is deliberate: the top of the hour is when
+    # everyone else's cron fires and GitHub's queue is most congested.
+    - cron: "23 */4 * * *"
+  workflow_dispatch:        # lets you trigger a run by hand from the Actions tab
+
+# Only one collector at a time. If a run is slow, the next one waits rather
+# than racing it and producing two files with clashing timestamps.
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+permissions:
+  contents: write           # required for the job to push data back
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Reference data is static between patches. Build it only if missing.
+      - name: Build reference data
+        run: |
+          if [ ! -f data/ref/marketable.parquet ]; then
+            python universalis_collect.py ref
+          else
+            echo "reference data present, skipping"
+          fi
+
+      - name: Snapshot
+        run: python universalis_collect.py snapshot --world "$WORLD" --depth 0
+        env:
+          WORLD: Light
+
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --staged --quiet; then
+            echo "nothing new"
+            exit 0
+          fi
+          git commit -m "snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Another run may have pushed while this one was collecting.
+          git pull --rebase --autostash
+          git push
