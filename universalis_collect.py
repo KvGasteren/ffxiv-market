@@ -56,20 +56,25 @@ SESSION.headers.update({"User-Agent": "personal-market-analysis/0.1"})
 
 def get(url: str, **params):
     """GET with simple retry/backoff. Universalis is free; don't hammer it."""
-    for attempt in range(5):
+    for attempt in range(10):
         try:
             r = SESSION.get(url, params=params, timeout=30)
-            if r.status_code == 429:
+            if r.status_code == 429:  # Rate limited
                 time.sleep(2 ** attempt)
                 continue
+            if r.status_code == 504:  # Gateway timeout - more aggressive backoff
+                if attempt < 9:
+                    wait_time = min(2 ** (attempt + 1), 120)  # Cap at 2 minutes
+                    print(f"  retry {attempt + 1} after 504 (waiting {wait_time}s)", file=sys.stderr)
+                    time.sleep(wait_time)
+                    continue
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:
-            if attempt == 4:
+            if attempt == 9:
                 raise
             print(f"  retry {attempt + 1} after {e}", file=sys.stderr)
             time.sleep(2 ** attempt)
-
 
 def chunks(seq, n):
     for i in range(0, len(seq), n):
